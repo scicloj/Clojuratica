@@ -1,0 +1,76 @@
+# Run tests against Wolfram
+# Based on
+# https://github.com/WolframResearch/WL-FunctionCompile-CI-Template?tab=readme-ov-file#2-create-an-on-demand-license-entitlement
+name: Test
+
+on: [push]
+
+jobs:
+
+  Run_Tests:
+
+    runs-on: ubuntu-latest
+    container:
+      image: wolframresearch/wolframengine:latest
+      options: --user root
+    env:
+      WOLFRAM_SYSTEM_ID: Linux-x86-64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      # It is important to install java before installing clojure tools which needs java
+      # exclusions: babashka, clj-kondo and cljstyle
+      - name: Prepare java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '11'
+
+      - name: Install build tools
+        run: |
+          apt-get -y update
+          apt-get -y install curl git zip
+
+      - name: Install clojure tools
+        uses: DeLaGuardo/setup-clojure@12.5
+        with:
+          # Install just one or all simultaneously
+          # The value must indicate a particular version of the tool, or use 'latest'
+          # to always provision the latest version
+          cli: 1.11.3.1463             # Clojure CLI based on tools.deps
+          #bb: 0.7.8                    # Babashka
+          clj-kondo: 2024.05.24        # Clj-kondo
+          #cljfmt: 0.10.2               # cljfmt
+          #cljstyle: 0.15.0             # cljstyle
+
+      # Optional step:
+      - name: Cache clojure dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+            ~/.deps.clj
+          # List all files containing dependencies:
+          key: cljdeps-${{ hashFiles('deps.edn') }}
+          restore-keys: cljdeps-
+
+      - name: Run tests
+        env:
+          # NOTE: The entitlement expires in a year and need to be re-created: log in to
+          # wolframcloud.com, open a new notebook (not Alpha one), paste in:
+          # CreateLicenseEntitlement[<| "StandardKernelLimit" -> 1, "LicenseExpiration" -> Quantity[10, "Minutes"], "EntitlementExpiration" -> Quantity[1, "Years"]|>]
+          # and execute w/ Shift-Enter
+          WOLFRAMSCRIPT_ENTITLEMENTID: ${{ secrets.WOLFRAM_ONDEMAND_LICENSE_ENTITLEMENT_JAKUB }}
+        run: |
+          #wolframscript -c 'SystemInformation["Kernel","InstallationDirectory"]'
+          ln -s /usr/local/Wolfram/WolframEngine/13.3/SystemFiles/Links/JLink/JLink.jar ./symlink-jlink.jar
+          clojure -X:test-run
+
+      - name: Get clj-kondo version
+        run: clj-kondo --lint
+
+#      - name: Get cljfmt version
+#        run: cljfmt --version
