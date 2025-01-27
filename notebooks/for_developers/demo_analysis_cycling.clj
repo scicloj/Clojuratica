@@ -1,4 +1,8 @@
 ;; # Using Wolframite to analyse cycle trips data {#sec-demo-analysis-cycling}
+;;
+;; We introduce you, the motivated Clojure developer, to using the Wolfram programming language as a Clojure library.
+;; Following some brief inspiration (why on earth should you do this?), and some getting started notes, we outline a 'real'
+;; workflow using the example of analysing data about bike trips.
 
 (ns for-developers.demo-analysis-cycling
   (:require
@@ -13,14 +17,11 @@
    [scicloj.kindly.v4.kind :as k])
   (:import (java.util.zip GZIPInputStream)))
 
-(k/md "
-We introduce you, the motivated Clojure developer, to using the Wolfram programming language as a Clojure library. Following some brief inspiration (why on earth should you do this?), and some getting started notes, we outline a 'real' workflow using the example of analysing data about bike trips.")
-
-; First, start & connect to a Wolfram Kernel (assuming all the common requires):
+; First, start & connect to a Wolfram Kernel:
 (wl/start!)
 
 (k/md "
-Now, let's play with some data! But first we will need to read them in from a CSV file. The docs
+Now, let's play with some data! But first we will need to read them in from a CSV file. Wolfram docs
 tell us [how to import the first ten lines](https://reference.wolfram.com/language/ref/format/CSV.html) of a CSV:
 
 ```wolfram
@@ -39,13 +40,12 @@ but we rather use our convenience functions:")
 Ideally, we'd take the easy path and follow the docs and use the very smart and flexible `Import` on our `202304_divvy_tripdata.csv.gz`.
 Sadly, the current version of Wolfram is not very efficient at this and with our 400k rows it is unbearably slow. I assume that with the
 shortened, 100k row file it wouldn't be much different. All the smartness and
-auto-detection costs \uD83E\uDD37. If we read only a few rows then it is fine (±2s for 10s - 100s of rows):")
+auto-detection costs \uD83E\uDD37. If we read only a few rows then it is fine (±2s for 10s - 100s of rows on my old Mac):")
 
 (k/table
  {:row-vectors
-  (-> (w/Import (.getAbsolutePath (io/file "docs-buildtime-data/202304_divvy_tripdata_first100k.csv.gz"))
-                ["Data" (w/Span 1 3)])
-      wl/!)})
+  (wl/! (w/Import (.getAbsolutePath (io/file "docs-buildtime-data/202304_divvy_tripdata_first100k.csv.gz"))
+                  ["Data" (w/Span 1 3)]))})
 
 (k/md "
 Note: [Loading the ± 400k rows file with the awesome SciCloj tooling](https://github.com/scicloj/clojure-data-scrapbook/blob/bdc46d643ac5fcdba2fb21002e269897274d9be3/projects/geography/chicago-bikes/notebooks/index.clj#L84-L88) would take ± 3.5s. How amazing is that?!
@@ -60,7 +60,7 @@ Sadly, it cannot handle a gzpipped files (as far as I know) so we need to unzip 
   (let [zip (io/file "docs-buildtime-data/202304_divvy_tripdata_first100k.csv.gz")]
     (with-open [zis (GZIPInputStream. (io/input-stream zip))]
       (io/copy zis (io/file "/tmp/huge.csv"))))
-  :extracted)
+  :done)
 
 (k/md "
 Now we are ready to read the data in. We will store them into a Wolfram-side var so that we can work with them further.
@@ -79,12 +79,12 @@ For readability and auto-completion, we will define vars for the names of the Wo
                                  (w/-> w/RecordSeparators ["\n" "\r\n" "\r"])
                                  (w/-> w/NullWords true)
                                  (w/-> w/RecordLists true)))
-               ;; Let's return only the length instead of all the large data:
+            ;; Let's return only the length instead of all the large data:
             (w/Length csv)))
 
 (k/md (str "We leverage the flexibility of [ReadList](" (first (h/help! w/ReadList :links true))
            "), instructing it to read \"Words\" separated by `,` (instead of applying the normal word separating characters),
-            thus reading individual column values. It reads them as records, separated by the given separators (which are the same as the default, shown here for clarity).
+            thus reading individual column values. It reads them as records, separated by the given RecordSeparators (which are the same as the default, shown here for clarity).
  I.e. each line is considered to be a record. And with `RecordLists -> True` we instruct it to put each record into a separate list and each row will thus
  become a list of values (instead of a single long list of all the column values in the whole file). Finally, we set `NullWords -> True` not to skip empty column values, so that all rows will have the same number of elements.)
 
@@ -94,7 +94,7 @@ For readability and auto-completion, we will define vars for the names of the Wo
 "))
 
 ;; Let's extract column names:
-(def headers (->> (wl/! (w/Part csv 1))
+(def headers (->> (wl/! (w/Part csv 1)) ; Wolfram indices are 1-based = take the 1st row
                   (map #(str/replace % "\"" ""))))
 
 ;; Let's have a look at row 98,765 to verify we get the data correctly:
@@ -114,6 +114,8 @@ For readability and auto-completion, we will define vars for the names of the Wo
 (defn rowvals
   "Return a Wolfram fn extracting values of the named columns and returning them as a Wolf list / Clj vector"
   [& col-names]
+  ;; Notice that the `mapv` is evaluated on clj side before we send the w/fn to Wolfram. A good example of combining
+  ;; Wolfram and Wolframite evaluations for greater power.
   (w/fn [row] (mapv #(col row %) col-names)))
 
 (k/md "
@@ -138,6 +140,10 @@ Let's see how it works:")
 
 (def loc-ks ["start_lat" "start_lng" "end_lat" "end_lng"])
 
+;; We will later use the defs above to "generate" a Wolfram lambda:
+
+(apply rowvals loc-ks)
+
 ;; Now we extract and parse the columns of interest (processing all but displaying only the first 3 here):
 (k/table
  {:column-names ["Start latitude" "Start longitude"
@@ -145,7 +151,8 @@ Let's see how it works:")
   :row-vectors
   (time ; 0.6s w/ Map only, ~2s with Select as well
    (wl/! (-> (w/= rows
-                  (->> (w/Select rawRows (w/AllTrue (w/fn [v] (w/Not (w/== v "")))))
+                  (->> ;; skip rows where we lack any of the values:
+                       (w/Select rawRows (w/AllTrue (w/fn [v] (w/Not (w/== v "")))))
                        (w/Map (w/Composition
                                (w/Map StringToMReal)
                                (apply rowvals loc-ks)))))
@@ -156,12 +163,12 @@ Let's see how it works:")
 ;; 2. We use `Composition` so that we can leverage our already defined `rowvals` to extract the values we care about,
 ;;    and then to parse them.
 
-;; Let's update our helper to reflect the new columns of rows:
+;; Let's update our helper for the new `rows`, reflecting the 4 columns they have:
 (defn rowvals' [& col-names]
   (let [header->idx' (zipmap loc-ks (next (range)))]
     (w/fn [row] (mapv #(w/Part row (header->idx' %)) col-names))))
 
-;; For me, it took ±0.8s to extract the 2 columns as text and 1.5s to parse them into numbers. With `ToExpression` it would take ±5s.
+;; For me, it took ±0.8s to extract the 2 columns as text, contrary to 1.5s when parsing them into numbers. With `ToExpression` it took ±5s.
 
 ;; #### Starting positions in a map
 ;;
@@ -173,7 +180,7 @@ Let's see how it works:")
               w/GeoHistogram
               ((requiring-resolve 'wolframite.tools.experimental/show!))))
 ;; but for this web page, we want to export and include the graphic as an image:
-(let [file (io/file "notebooks" "start-locs.webp")]
+(let [file (io/file "notebooks" "generated" "start-locs.webp")]
   (when-not (.exists file)
     (time (wl/! (let [d (->> rows
                              (w/Map (rowvals' "start_lat" "start_lng"))
